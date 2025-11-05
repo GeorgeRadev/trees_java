@@ -211,7 +211,7 @@ public class BTreeTest {
   }
 
   private void validateIndex(BTree<Long, String> btree) {
-    if(!validateIndex){
+    if (!validateIndex) {
       return;
     }
     long prev = -1;

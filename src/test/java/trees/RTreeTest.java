@@ -5,13 +5,15 @@ import java.util.function.Consumer;
 import org.junit.jupiter.api.Test;
 
 public class RTreeTest {
+  boolean validateIndex = true;
 
   @Test
   public void testRtreeOrders() {
     test(3, 16);
-    // test(4, 16);
-    // test(8, 64);
-    // test(64, 150_000);
+    test(4, 16);
+    test(8, 64);
+    validateIndex = false;
+    test(64, 150_000);
   }
 
   public static class RangeBox implements RBox {
@@ -121,14 +123,14 @@ public class RTreeTest {
     for (int i = 0; i < elementsCount; i++) {
       // System.out.println("before add " + elementValues[i].id);
       // printTree(rtree);
-      int s= rtree.size();
+      int s = rtree.size();
       rtree.add(elementValues[i]);
       if ((s + 1) != rtree.size()) {
         throw new RuntimeException("element not stored");
       }
       // System.out.println("after add " + elementValues[i].id);
       // printTree(rtree);
-      rtree._validateIndex();
+      validateIndex(rtree);
       var stored = rtree.get(elementValues[i].id);
       if (!elementValues[i].id.equals(stored.id)) {
         throw new RuntimeException("element not stored");
@@ -182,17 +184,17 @@ public class RTreeTest {
       }
     }
 
-    rtree._validateIndex();
+    validateIndex(rtree);
 
     // delete sequential
     for (int i = 0; i < elementsCount; i++) {
       var key = elementValues[i].id;
-      System.out.println("before delete " + key);
-      printTree(rtree);
+      // System.out.println("before delete " + key);
+      // printTree(rtree);
       rtree.removeByValue(elementValues[i]);
-      rtree._validateIndex();
-      System.out.println("after delete " + key);
-      printTree(rtree);
+      validateIndex(rtree);
+      // System.out.println("after delete " + key);
+      // printTree(rtree);
       var value = rtree.get(key);
       if (value != null) {
         throw new RuntimeException("element not deleted");
@@ -202,11 +204,11 @@ public class RTreeTest {
       throw new RuntimeException("count after deletion does not match");
     }
 
-    // insert direct
+    // insert
     for (int i = 0; i < elementsCount; i++) {
-      // printTree(btree);
       var value = elementValues[i];
       // System.out.println("add: " + value);
+      // printTree(rtree);
       rtree.add(value);
       var key = value.id;
       var stored = rtree.get(key);
@@ -257,7 +259,6 @@ public class RTreeTest {
         };
 
         rtree.getAll(consumer);
-        rtree.getAll(consumer);
         if (count != counter[0]) {
           throw new RuntimeException("count does not match");
         }
@@ -276,6 +277,12 @@ public class RTreeTest {
     }
 
     // printTree(btree);
+  }
+
+  void validateIndex(RTree<?, ?> rtree) {
+    if (validateIndex) {
+      rtree._validateIndex();
+    }
   }
 
   static void printTree(RTree<?, ?> rtree) {

@@ -71,7 +71,9 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     if (ref != null) {
       var node = ref.node;
       node.delete(ref.value);
-      _removeEmptyAndMerge(node.parent);
+      if (node.parent != null) {
+        _removeEmptyAndMerge(node.parent);
+      }
       // check if we can lower the level
       while (root.count == 1 && height > 0) {
         var child = root.getChild(0);
@@ -169,7 +171,9 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         // insert into the current node
         node.append(context.box, context.value);
         _updateIndex(context.key, context.value, node);
-        node.updateUpward();
+        if (node.parent != null) {
+          node.parent._updateUpward();
+        }
         return null;
       } else {
         // split and insert
@@ -195,6 +199,9 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         if (ix >= node.count) {
           ix = node.count - 1;
         }
+        // if (ix > 0 && ((RBox) node.boxes[ix]).compareTo(context.box) > 0) {
+        //   ix--;
+        // }
       }
       // insert at position ix
       var newNode = _insert(node.getChild(ix), level - 1, context);
@@ -207,10 +214,11 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         if (node.count < ORDER) {
           // insert into the current node
           node.append(newNode.getBox(0), newNode);
-          node.updateUpward();
+          node._updateUpward();
         } else {
           // split and insert
           result = _splitAndAdd(node, context, newNode);
+          result.parent = node;
         }
         return result;
       }
@@ -249,11 +257,11 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
     indexes[ORDER] = ORDER;
     boxes[ORDER] = (appendNode != null) ? appendNode.getBox() : (RBox) (context.box);
-    children[ORDER] = (appendNode != null) ? appendNode :  context.value;
+    children[ORDER] = (appendNode != null) ? appendNode : context.value;
 
     // arange indexes by the order
     Arrays.sort(indexes, new ArrayIndexComparator(boxes));
-    
+
     // split
     final var pivot = (ORDER + 2) >> 1;
     var newNode = new Node<VALUE>(ORDER);
@@ -289,6 +297,12 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         VALUE value = (VALUE) node.children[newIndex];
         _updateIndex(toKey.apply(value), value, node);
       }
+    } else {
+      // update parents
+      for (int i = 0; i < newNode.count; i++) {
+        var child = newNode.getChild(i);
+        child.parent = newNode;
+      }
     }
     return newNode;
   }
@@ -297,19 +311,34 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     if (node.count > 1) {
       for (int i = node.count - 2; i >= 0; i--) {
         var child = node.getChild(i);
+        var child2 = node.getChild(i + 1);
         int count = child.count;
-        if (count + node.getChild(i + 1).count <= ORDER) {
-          child.merge(node.getChild(i + 1));
+        if (count + child2.count <= ORDER) {
+          child.merge(child2);
           node.delete(i + 1);
           if (!((child.children[0]) instanceof Node<?>)) {
             // level 0 - update index
             for (int l = child.count - 1; l >= count; l--) {
-              VALUE value = (VALUE) node.children[l];
+              VALUE value = (VALUE) child.children[l];
               _updateIndex(toKey.apply(value), value, child);
+            }
+          }
+        } else if (count < (ORDER >> 1)) {
+          // just move some nodes to distribute
+          var pivot = (ORDER >> 1);
+          // get some from the second node
+          while (child.count < pivot) {
+            var k = (RBox) child2.boxes[0];
+            var v = child2.children[0];
+            child.append(k, v);
+            child2.delete(0);
+            if (!(v instanceof Node<?>)) {
+              _updateIndex(toKey.apply((VALUE) v), (VALUE) v, child);
             }
           }
         }
       }
+      node._updateBoxes();
     }
     if (node.parent != null) {
       _removeEmptyAndMerge(node.parent);
@@ -403,11 +432,16 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
 
     RBox getBox() {
-      var box = ((RBox) boxes[0]).clone();
-      for (int i = 1; i < count; i++) {
-        ((RBox) boxes[i]).union(box);
+      try {
+        var box = ((RBox) boxes[0]).clone();
+        for (int i = 1; i < count; i++) {
+          ((RBox) boxes[i]).union(box);
+        }
+        return box;
+
+      } catch (Exception e) {
+        throw e;
       }
-      return box;
     }
 
     RBox getBox(int ix) {
@@ -422,11 +456,19 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       return (Node<VALUE>) children[ix];
     }
 
-    void append(RBox key, Object value) {
-      boxes[count] = key;
+    void append(RBox box, Object value) {
+      boxes[count] = box;
       children[count] = value;
       count++;
     }
+
+    // void insert(int ix, RBox box, Object value) {
+    // System.arraycopy(boxes, ix, boxes, ix + 1, count - ix);
+    // System.arraycopy(children, ix, children, ix + 1, count - ix);
+    // boxes[ix] = box;
+    // children[ix] = value;
+    // count++;
+    // }
 
     void delete(int ix) {
       if (count > 1 && ix + 1 < count) {
@@ -448,16 +490,17 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       throw new IllegalStateException("index is not consistent with node elements");
     }
 
-    void updateUpward() {
-      var isNode = children[0] instanceof Node;
-      if (isNode) {
-        for (int i = 0; i < count; i++) {
-          var b = getChild(i).getBox();
-          boxes[i] = b;
-        }
+    void _updateBoxes() {
+      for (int i = 0; i < count; i++) {
+        var b = getChild(i).getBox();
+        boxes[i] = b;
       }
+    }
+
+    void _updateUpward() {
+      _updateBoxes();
       if (parent != null) {
-        parent.updateUpward( );
+        parent._updateUpward();
       }
     }
 
