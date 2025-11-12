@@ -1,5 +1,6 @@
 package trees;
 
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import org.junit.jupiter.api.Test;
@@ -152,19 +153,61 @@ public class RTreeTest {
       }
     }
 
+    { // test all parallel
+      final int[] counter = new int[] { 0 };
+      Consumer<Range> consumer = (e) -> {
+        counter[0]++;
+      };
+
+      rtree.getAllParallel(consumer);
+      if (counter[0] != elementsCount || rtree.size() != elementsCount) {
+        throw new RuntimeException("count does not match");
+      }
+    }
+
     { // test range
       int start = elementsCount >> 2;
       int end = start * 3;
       var box = new RangeBox(10 * start, 10 * end);
 
       final int[] counter = new int[] { 0 };
-      Consumer<Range> consumer = (e) -> {
-        counter[0]++;
-      };
+      {
+        Consumer<Range> consumer = (e) -> {
+          counter[0]++;
+        };
 
-      rtree.intersect(box, consumer);
-      if (counter[0] >= elementsCount) {
-        throw new RuntimeException("range does not match");
+        rtree.intersect(box, consumer);
+        if (counter[0] >= elementsCount) {
+          throw new RuntimeException("range does not match");
+        }
+      }
+      final var counterParallel = new AtomicInteger(0);
+      {
+        Consumer<Range> consumer = (e) -> {
+          counterParallel.incrementAndGet();
+        };
+
+        rtree.intersectParallel(box, consumer);
+        if (counterParallel.get() >= elementsCount) {
+          throw new RuntimeException("range does not match");
+        }
+      }
+      final var counterParallelN = new AtomicInteger(0);
+      {
+        Consumer<Range> consumer = (e) -> {
+          counterParallelN.incrementAndGet();
+        };
+
+        rtree.intersectParallel(box, consumer, 8);
+        if (counterParallelN.get() >= elementsCount) {
+          throw new RuntimeException("range does not match");
+        }
+      }
+      if (counter[0] != counterParallel.get()) {
+        throw new RuntimeException("search does not match");
+      }
+      if (counter[0] != counterParallelN.get()) {
+        throw new RuntimeException("search does not match");
       }
     }
 

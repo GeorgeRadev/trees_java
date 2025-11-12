@@ -2,6 +2,8 @@ package trees;
 
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.RecursiveAction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -116,11 +118,37 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
   /**
    * Gets all values intersecting with a box.
    *
-   * @param box box to intersect with.
+   * @param box      box to intersect with.
+   * @param consumer callback for the values.
    * @return Array of values mathing the box.
    */
   public void intersect(RBox box, Consumer<VALUE> consumer) {
     _search(root, height, box, consumer);
+  }
+
+  /**
+   * Gets all values intersecting with a box in parallel.
+   *
+   * @param box      box to intersect with.
+   * @param consumer callback for the values.
+   * @return Array of values mathing the box.
+   */
+  public void intersectParallel(RBox box, Consumer<VALUE> consumer) {
+    var action = new SearchAction(root, height, box, consumer);
+    executeTask(action, 0);
+  }
+
+  /**
+   * Gets all values intersecting with a box in parallel with specified threads.
+   *
+   * @param box             box to intersect with.
+   * @param consumer        callback for the values.
+   * @param parallelThreads number of threadi in the pool.
+   * @return Array of values mathing the box.
+   */
+  public void intersectParallel(RBox box, Consumer<VALUE> consumer, int parallelThreads) {
+    var action = new SearchAction(root, height, box, consumer);
+    executeTask(action, parallelThreads);
   }
 
   /**
@@ -131,12 +159,32 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
   }
 
   /**
+   * @return all values from the tree ttraversed in parallel.
+   */
+  public void getAllParallel(Consumer<VALUE> consumer) {
+    var action = new SearchAllAction(root, height, consumer);
+    executeTask(action, 0);
+  }
+
+  /**
    * Returns a string representation of this B-tree (for debugging).
    *
    * @return a string representation of this B-tree.
    */
   public String toString() {
     return _toString(root, height, "") + "\n";
+  }
+
+  private void executeTask(RecursiveAction action, int parallelThreads) {
+    final ForkJoinPool pool;
+    if (parallelThreads == 0) {
+      pool = ForkJoinPool.commonPool();
+    } else {
+      pool = new ForkJoinPool(parallelThreads);
+    }
+    pool.execute(action);
+    action.join();
+    pool.shutdown();
   }
 
   private VALUE _put(VALUE value) {
@@ -200,7 +248,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
           ix = node.count - 1;
         }
         // if (ix > 0 && ((RBox) node.boxes[ix]).compareTo(context.box) > 0) {
-        //   ix--;
+        // ix--;
         // }
       }
       // insert at position ix
@@ -518,5 +566,70 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     KEY key;
     RBox box;
     VALUE value;
+  }
+
+  private static class SearchAction<VALUE> extends RecursiveAction {
+    private final Node<VALUE> node;
+    private final int level;
+    private final RBox box;
+    private final Consumer<VALUE> consumer;
+
+    public SearchAction(Node<VALUE> node, int level, RBox box, Consumer<VALUE> consumer) {
+      this.node = node;
+      this.level = level;
+      this.box = box;
+      this.consumer = consumer;
+    }
+
+    @Override
+    protected void compute() {
+      if (level == 0) {
+        // values
+        for (int i = 0; i < node.count; i++) {
+          var b = node.getBox(i);
+          switch (box.intersect(b)) {
+            case CONTAINS, INTERSECTS -> consumer.accept(node.getValue(i));
+            case NO_COLLISION -> {
+              /* nothing to do */}
+          }
+        }
+      } else {
+        // nodes
+        for (int i = 0; i < node.count; i++) {
+          var b = node.getBox(i);
+          switch (box.intersect(b)) {
+            case CONTAINS -> (new SearchAllAction(node.getChild(i), level - 1, consumer)).invoke();
+            case INTERSECTS -> (new SearchAction(node.getChild(i), level - 1, box, consumer)).invoke();
+            case NO_COLLISION -> {
+              /* nothing to do */}
+          }
+        }
+      }
+    }
+  }
+
+  private static class SearchAllAction<VALUE> extends RecursiveAction {
+    private final Node<VALUE> node;
+    private final int level;
+    private final Consumer<VALUE> consumer;
+
+    public SearchAllAction(Node<VALUE> node, int level, Consumer<VALUE> consumer) {
+      this.node = node;
+      this.level = level;
+      this.consumer = consumer;
+    }
+
+    @Override
+    protected void compute() {
+      if (level == 0) {
+        for (int i = 0; i < node.count; i++) {
+          consumer.accept(node.getValue(i));
+        }
+      } else {
+        for (int i = 0; i < node.count; i++) {
+          (new SearchAllAction(node.getChild(i), level - 1, consumer)).invoke();
+        }
+      }
+    }
   }
 }
