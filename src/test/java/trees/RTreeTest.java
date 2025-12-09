@@ -1,5 +1,7 @@
 package trees;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -61,9 +63,9 @@ public class RTreeTest {
     public int compareTo(Object o) {
       var b = ((RangeBox) o);
       if (s == b.s) {
-        return b.e - e;
+        return e - b.e;
       } else {
-        return b.s - s;
+        return s - b.s;
       }
     }
   }
@@ -100,7 +102,40 @@ public class RTreeTest {
     }
   }
 
+  public void testRangeBox() {
+    {
+      var a = new RangeBox(0, 98);
+      var b = new RangeBox(93, 139);
+      var boxes = new RangeBox[] { a, b };
+      var box = new RangeBox(10, 120);
+
+      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
+      assertEquals(0, ix);
+    }
+    {
+      var a = new RangeBox(0, 98);
+      var b = new RangeBox(93, 139);
+      var boxes = new RangeBox[] { a, b };
+      var box = new RangeBox(153, 181);
+
+      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
+      assertEquals(1, ix);
+    }
+    {
+      var a = new RangeBox(0, 98);
+      var b = new RangeBox(93, 139);
+      var c = new RangeBox(120, 180);
+      var boxes = new RangeBox[] { a, b, c };
+      var box = new RangeBox(153, 181);
+
+      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
+      assertEquals(2, ix);
+    }
+  }
+
   public void test(int order, int elementsCount) {
+    testRangeBox();
+
     var rtree = new RTree<String, Range>(order, Range::toRangeKey, Range::toRangeBox);
 
     // init elements

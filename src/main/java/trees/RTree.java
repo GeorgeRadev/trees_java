@@ -211,6 +211,44 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     return oldValue;
   }
 
+  // modified binary search for getting the place to insert also as search closest
+  static int binarySearch(Object[] a, int fromIndex, int toIndex, Object key) {
+    if (fromIndex > toIndex) {
+      throw new IllegalArgumentException(
+          "fromIndex(" + fromIndex + ") > toIndex(" + toIndex + ")");
+    }
+    if (fromIndex < 0) {
+      throw new ArrayIndexOutOfBoundsException(fromIndex);
+    }
+    if (toIndex > a.length) {
+      throw new ArrayIndexOutOfBoundsException(toIndex);
+    }
+    int low = fromIndex;
+    int high = toIndex - 1;
+    int mid = 0;
+    int cmp = 0;
+
+    while (low <= high) {
+      mid = (low + high) >>> 1;
+      Comparable midVal = (Comparable) a[mid];
+      cmp = midVal.compareTo(key);
+
+      if (cmp < 0)
+        low = mid + 1;
+      else if (cmp > 0)
+        high = mid - 1;
+      else
+        return mid;
+    }
+    if (high < low) {
+      low = high;
+    }
+    if (low < 0) {
+      low = 0;
+    }
+    return low >= toIndex ? (toIndex - 1) : low;
+  }
+
   // return new node if added
   private Node<VALUE> _insert(Node<VALUE> node, int level, InsertContext<KEY, VALUE> context) {
     if (level == 0) {
@@ -240,16 +278,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         }
       }
       if (ix < 0) {
-        ix = Arrays.binarySearch(node.boxes, 0, node.count, box);
-        if (ix < 0) {
-          ix = -ix - 1;
-        }
-        if (ix >= node.count) {
-          ix = node.count - 1;
-        }
-        // if (ix > 0 && ((RBox) node.boxes[ix]).compareTo(context.box) > 0) {
-        // ix--;
-        // }
+        ix = binarySearch(node.boxes, 0, node.count, box);
       }
       // insert at position ix
       var newNode = _insert(node.getChild(ix), level - 1, context);
@@ -289,7 +318,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
     @Override
     public int compare(Integer index1, Integer index2) {
-      return (array[index2]).compareTo(array[index1]);
+      return (array[index1]).compareTo(array[index2]);
     }
   }
 
