@@ -8,7 +8,7 @@ boolean validateIndex = true;
   @Test
   public void testOrders() {
     test(3, 16);
-    test(4, 16);
+    test(4, 32);
     test(8, 64);
     validateIndex = false;
     test(64, 150_000);
@@ -35,9 +35,9 @@ boolean validateIndex = true;
     for (int i = 0; i < elementsCount; i++) {
       var key = elementValues[i];
       var value = String.valueOf(elementValues[i]);
-      // printTree(btree);
-      // System.out.println("add: " + key);
       btree.computeIfAbsent(key, () -> value);
+      // System.out.println("add: " + key);
+      // printTree(btree);
       validateIndex(btree);
       var stored = btree.get(key);
       if (!value.equals(stored)) {
@@ -220,4 +220,21 @@ boolean validateIndex = true;
     System.out.println("-----------------------");
     System.out.println();
   }
+
+  // @Test
+  // public void testBinarySearch() {
+  // return -low + ((cmp - 3) >> 1);
+  //   var arr = new Long[5];
+  //   arr[0] = 5L;
+  //   assertEquals(0, RTree.binarySearch(arr, 0, 1, 5L));
+  //   assertEquals(-1, RTree.binarySearch(arr, 0, 1, 3L));
+  //   assertEquals(-2, RTree.binarySearch(arr, 0, 1, 7L));
+
+  //   arr[1] = 10L;
+  //   assertEquals(0, RTree.binarySearch(arr, 0, 2, 5L));
+  //   assertEquals(1, RTree.binarySearch(arr, 0, 2, 10L));
+  //   assertEquals(-1, RTree.binarySearch(arr, 0, 2, 3L));
+  //   assertEquals(-2, RTree.binarySearch(arr, 0, 2, 7L));
+  //   assertEquals(-3, RTree.binarySearch(arr, 0, 2, 12L));
+  // }
 }

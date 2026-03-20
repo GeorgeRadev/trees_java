@@ -216,8 +216,8 @@ public class BTreeLong<VALUE> {
     if (u != null) {
       // need to split root
       var newRoot = new Node<VALUE>(ORDER);
-      newRoot.append(root.keys[0], root);
-      newRoot.append(u.keys[0], u);
+      newRoot.insert(ORDER, root.keys[0], root);
+      newRoot.insert(ORDER, u.keys[0], u);
       root = newRoot;
       height++;
     }
@@ -250,11 +250,7 @@ public class BTreeLong<VALUE> {
         size++;
         if (node.count < ORDER) {
           // insert into the current node
-          if (ix >= node.count) {
-            node.append(key, context.value);
-          } else {
-            node.insert(ix, key, context.value);
-          }
+          node.insert(ix, key, context.value);
           return null;
         } else {
           // split and insert
@@ -281,11 +277,7 @@ public class BTreeLong<VALUE> {
         // insert returned node as value in the current one
         if (node.count < ORDER) {
           // insert into the current node
-          if (ix + 1 >= node.count) {
-            node.append(newNode.keys[0], newNode);
-          } else {
-            node.insert(ix + 1, newNode.keys[0], newNode);
-          }
+          node.insert(ix + 1, newNode.keys[0], newNode);
           return null;
         } else {
           // split and insert
@@ -335,7 +327,7 @@ public class BTreeLong<VALUE> {
               while (firstNode.count < pivot) {
                 var k = secondNode.keys[0];
                 var v = secondNode.children[0];
-                firstNode.append(k, v);
+                firstNode.insert(ORDER, k, v);
                 secondNode.delete(0);
               }
               // update index
@@ -410,15 +402,15 @@ public class BTreeLong<VALUE> {
       return (Node<VALUE>) children[ix];
     }
 
-    void append(long key, Object value) {
-      keys[count] = key;
-      children[count] = value;
-      count++;
-    }
-
     void insert(int ix, long key, Object value) {
-      System.arraycopy(keys, ix, keys, ix + 1, count - ix);
-      System.arraycopy(children, ix, children, ix + 1, count - ix);
+      if (ix < count) {
+        // insert
+        System.arraycopy(keys, ix, keys, ix + 1, count - ix);
+        System.arraycopy(children, ix, children, ix + 1, count - ix);
+      } else {
+        // append
+        ix = count;
+      }
       keys[ix] = key;
       children[ix] = value;
       count++;

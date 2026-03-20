@@ -13,7 +13,7 @@ public class RTreeTest {
   @Test
   public void testRtreeOrders() {
     test(3, 16);
-    test(4, 16);
+    test(4, 32);
     test(8, 64);
     validateIndex = false;
     test(64, 150_000);
@@ -102,6 +102,7 @@ public class RTreeTest {
     }
   }
 
+  @Test
   public void testRangeBox() {
     {
       var a = new RangeBox(0, 98);
@@ -110,7 +111,7 @@ public class RTreeTest {
       var box = new RangeBox(10, 120);
 
       var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-      assertEquals(0, ix);
+      assertEquals(1, ix);
     }
     {
       var a = new RangeBox(0, 98);
@@ -119,23 +120,27 @@ public class RTreeTest {
       var box = new RangeBox(153, 181);
 
       var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-      assertEquals(1, ix);
+      assertEquals(2, ix);
     }
     {
       var a = new RangeBox(0, 98);
       var b = new RangeBox(93, 139);
       var c = new RangeBox(120, 180);
       var boxes = new RangeBox[] { a, b, c };
-      var box = new RangeBox(153, 181);
-
-      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-      assertEquals(2, ix);
+      {
+        var box = new RangeBox(153, 181);
+        var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
+        assertEquals(3, ix);
+      }
+      {
+        var box = new RangeBox(100, 140);
+        var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
+        assertEquals(2, ix);
+      }
     }
   }
 
   public void test(int order, int elementsCount) {
-    testRangeBox();
-
     var rtree = new RTree<String, Range>(order, Range::toRangeKey, Range::toRangeBox);
 
     // init elements

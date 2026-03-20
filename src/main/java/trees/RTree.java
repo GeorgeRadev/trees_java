@@ -201,8 +201,8 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     if (newNode != null) {
       // need to split root
       var newRoot = new Node<VALUE>(ORDER);
-      newRoot.append(root.getBox(), root);
-      newRoot.append(newNode.getBox(), newNode);
+      newRoot.insert(ORDER, root.getBox(), root);
+      newRoot.insert(ORDER, newNode.getBox(), newNode);
       root.parent = newRoot;
       newNode.parent = newRoot;
       root = newRoot;
@@ -213,7 +213,9 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
   // modified binary search for getting the place to insert also as search closest
   static int binarySearch(Object[] a, int fromIndex, int toIndex, Object key) {
-    if (fromIndex > toIndex) {
+    if (fromIndex == toIndex) {
+      return fromIndex;
+    } else if (fromIndex > toIndex) {
       throw new IllegalArgumentException(
           "fromIndex(" + fromIndex + ") > toIndex(" + toIndex + ")");
     }
@@ -225,13 +227,12 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
     int low = fromIndex;
     int high = toIndex - 1;
-    int mid = 0;
+    int mid;
     int cmp = 0;
 
     while (low <= high) {
       mid = (low + high) >>> 1;
-      Comparable midVal = (Comparable) a[mid];
-      cmp = midVal.compareTo(key);
+      cmp = ((Comparable) a[mid]).compareTo(key);
 
       if (cmp < 0)
         low = mid + 1;
@@ -240,13 +241,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       else
         return mid;
     }
-    if (high < low) {
-      low = high;
-    }
-    if (low < 0) {
-      low = 0;
-    }
-    return low >= toIndex ? (toIndex - 1) : low;
+    return low;
   }
 
   // return new node if added
@@ -255,7 +250,8 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       // value node
       if (node.count < ORDER) {
         // insert into the current node
-        node.append(context.box, context.value);
+        int ix = binarySearch(node.boxes, 0, node.count, context.box);
+        node.insert(ix, context.box, context.value);
         _updateIndex(context.key, context.value, node);
         if (node.parent != null) {
           node.parent._updateUpward();
@@ -278,7 +274,11 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         }
       }
       if (ix < 0) {
+        // we have collision in boxes
         ix = binarySearch(node.boxes, 0, node.count, box);
+        if (ix >= node.count) {
+          ix = node.count - 1;
+        }
       }
       // insert at position ix
       var newNode = _insert(node.getChild(ix), level - 1, context);
@@ -290,7 +290,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         // insert returned node as value in the current one
         if (node.count < ORDER) {
           // insert into the current node
-          node.append(newNode.getBox(0), newNode);
+          node.insert(ix + 1, newNode.getBox(0), newNode);
           node._updateUpward();
         } else {
           // split and insert
@@ -407,7 +407,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
           while (child.count < pivot) {
             var k = (RBox) child2.boxes[0];
             var v = child2.children[0];
-            child.append(k, v);
+            child.insert(ORDER, k, v);
             child2.delete(0);
             if (!(v instanceof Node<?>)) {
               _updateIndex(toKey.apply((VALUE) v), (VALUE) v, child);
@@ -533,19 +533,19 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       return (Node<VALUE>) children[ix];
     }
 
-    void append(RBox box, Object value) {
-      boxes[count] = box;
-      children[count] = value;
+    void insert(int ix, RBox box, Object value) {
+      if (ix < count) {
+        // insert
+        System.arraycopy(boxes, ix, boxes, ix + 1, count - ix);
+        System.arraycopy(children, ix, children, ix + 1, count - ix);
+      } else {
+        // append
+        ix = count;
+      }
+      boxes[ix] = box;
+      children[ix] = value;
       count++;
     }
-
-    // void insert(int ix, RBox box, Object value) {
-    // System.arraycopy(boxes, ix, boxes, ix + 1, count - ix);
-    // System.arraycopy(children, ix, children, ix + 1, count - ix);
-    // boxes[ix] = box;
-    // children[ix] = value;
-    // count++;
-    // }
 
     void delete(int ix) {
       if (count > 1 && ix + 1 < count) {
