@@ -1,5 +1,6 @@
 package trees;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.concurrent.ForkJoinPool;
@@ -128,10 +129,11 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
   /**
    * Gets all values intersecting with a box in parallel.
+   * The consumer may be invoked concurrently from multiple threads and must be
+   * thread-safe.
    *
    * @param box      box to intersect with.
    * @param consumer callback for the values.
-   * @return Array of values mathing the box.
    */
   public void intersectParallel(RBox box, Consumer<VALUE> consumer) {
     var action = new SearchAction(root, height, box, consumer);
@@ -140,11 +142,12 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
   /**
    * Gets all values intersecting with a box in parallel with specified threads.
+   * The consumer may be invoked concurrently from multiple threads and must be
+   * thread-safe.
    *
    * @param box             box to intersect with.
    * @param consumer        callback for the values.
-   * @param parallelThreads number of threadi in the pool.
-   * @return Array of values mathing the box.
+   * @param parallelThreads number of threads in the pool.
    */
   public void intersectParallel(RBox box, Consumer<VALUE> consumer, int parallelThreads) {
     var action = new SearchAction(root, height, box, consumer);
@@ -159,7 +162,8 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
   }
 
   /**
-   * @return all values from the tree ttraversed in parallel.
+   * Traverses all values from the tree in parallel. The consumer may be invoked
+   * concurrently from multiple threads and must be thread-safe.
    */
   public void getAllParallel(Consumer<VALUE> consumer) {
     var action = new SearchAllAction(root, height, consumer);
@@ -287,15 +291,19 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         return null;
       } else {
         Node<VALUE> result = null;
+        // The child we descended into grew and split, so its stored box is stale.
+        // Refresh it before it is read below; otherwise the split path (which does
+        // not call _updateUpward) copies the stale box and can leave a parent box
+        // that under-covers the child, causing search to prune away real matches.
+        node.boxes[ix] = node.getChild(ix).getBox();
         // insert returned node as value in the current one
         if (node.count < ORDER) {
           // insert into the current node
-          node.insert(ix + 1, newNode.getBox(0), newNode);
+          node.insert(ix + 1, newNode.getBox(), newNode);
           node._updateUpward();
         } else {
           // split and insert
           result = _splitAndAdd(node, context, newNode);
-          result.parent = node;
         }
         return result;
       }
@@ -411,6 +419,9 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
             child2.delete(0);
             if (!(v instanceof Node<?>)) {
               _updateIndex(toKey.apply((VALUE) v), (VALUE) v, child);
+            } else {
+              // reparent the moved internal-node child
+              ((Node<VALUE>) v).parent = child;
             }
           }
         }
@@ -422,7 +433,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
   }
 
-  private void _search(Node<VALUE> node, int level, RBox box, Consumer<VALUE> consumer) {
+  private static <VALUE> void _search(Node<VALUE> node, int level, RBox box, Consumer<VALUE> consumer) {
     if (level == 0) {
       // values
       for (int i = 0; i < node.count; i++) {
@@ -447,7 +458,7 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
   }
 
-  private void _searchAll(Node<VALUE> node, int level, Consumer<VALUE> consumer) {
+  private static <VALUE> void _searchAll(Node<VALUE> node, int level, Consumer<VALUE> consumer) {
     if (level == 0) {
       // values
       for (int i = 0; i < node.count; i++) {
@@ -475,6 +486,40 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       }
     }
     return s.toString();
+  }
+
+  /**
+   * Debugging helper: asserts every node's {@code parent} back-pointer points at
+   * its actual parent, and every stored child box <em>covers</em> the child's real
+   * MBR. Coverage (not exact tightness) is the correctness-critical invariant: an
+   * under-covering box would let a search wrongly prune a subtree that holds
+   * matches. Stored boxes may be loose (over-covering) after cascading splits,
+   * which only costs pruning efficiency, so this does not assert exact equality.
+   */
+  void _validateStructure() {
+    if (root.parent != null) {
+      throw new IllegalStateException("root parent must be null");
+    }
+    _validateNode(root, height);
+  }
+
+  private void _validateNode(Node<VALUE> node, int level) {
+    if (level == 0) {
+      return;
+    }
+    for (int i = 0; i < node.count; i++) {
+      var child = node.getChild(i);
+      if (child.parent != node) {
+        throw new IllegalStateException("parent pointer mismatch at level " + level);
+      }
+      var stored = node.getBox(i);
+      var actual = child.getBox();
+      // stored must contain the child's true MBR (no under-coverage -> no false negatives)
+      if (stored.intersect(actual) != IntersectResult.CONTAINS) {
+        throw new IllegalStateException("stored box does not cover the child's MBR at level " + level);
+      }
+      _validateNode(child, level - 1);
+    }
   }
 
   void _validateIndex() {
@@ -582,9 +627,16 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
 
     public void merge(Node<VALUE> secondNode) {
+      int start = count;
       System.arraycopy(secondNode.boxes, 0, boxes, count, secondNode.count);
       System.arraycopy(secondNode.children, 0, children, count, secondNode.count);
       count += secondNode.count;
+      // reparent any moved internal-node children to this node
+      for (int i = start; i < count; i++) {
+        if (children[i] instanceof Node) {
+          ((Node<VALUE>) children[i]).parent = this;
+        }
+      }
       Arrays.fill(secondNode.boxes, 0, secondNode.count, null);
       Arrays.fill(secondNode.children, 0, secondNode.count, null);
       secondNode.count = 0;
@@ -596,6 +648,10 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     RBox box;
     VALUE value;
   }
+
+  // At or below this level a task traverses sequentially instead of spawning
+  // child tasks, so fork/join overhead does not dominate near the leaves.
+  private static final int PARALLEL_CUTOFF_LEVEL = 1;
 
   private static class SearchAction<VALUE> extends RecursiveAction {
     private final Node<VALUE> node;
@@ -612,28 +668,23 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
     @Override
     protected void compute() {
-      if (level == 0) {
-        // values
-        for (int i = 0; i < node.count; i++) {
-          var b = node.getBox(i);
-          switch (box.intersect(b)) {
-            case CONTAINS, INTERSECTS -> consumer.accept(node.getValue(i));
-            case NO_COLLISION -> {
-              /* nothing to do */}
-          }
-        }
-      } else {
-        // nodes
-        for (int i = 0; i < node.count; i++) {
-          var b = node.getBox(i);
-          switch (box.intersect(b)) {
-            case CONTAINS -> (new SearchAllAction(node.getChild(i), level - 1, consumer)).invoke();
-            case INTERSECTS -> (new SearchAction(node.getChild(i), level - 1, box, consumer)).invoke();
-            case NO_COLLISION -> {
-              /* nothing to do */}
-          }
+      if (level <= PARALLEL_CUTOFF_LEVEL) {
+        // small subtree - traverse sequentially
+        _search(node, level, box, consumer);
+        return;
+      }
+      // fan out: fork a task per intersecting child, then join them all
+      var tasks = new ArrayList<RecursiveAction>();
+      for (int i = 0; i < node.count; i++) {
+        var b = node.getBox(i);
+        switch (box.intersect(b)) {
+          case CONTAINS -> tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer));
+          case INTERSECTS -> tasks.add(new SearchAction<>(node.getChild(i), level - 1, box, consumer));
+          case NO_COLLISION -> {
+            /* nothing to do */}
         }
       }
+      invokeAll(tasks);
     }
   }
 
@@ -650,15 +701,15 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
 
     @Override
     protected void compute() {
-      if (level == 0) {
-        for (int i = 0; i < node.count; i++) {
-          consumer.accept(node.getValue(i));
-        }
-      } else {
-        for (int i = 0; i < node.count; i++) {
-          (new SearchAllAction(node.getChild(i), level - 1, consumer)).invoke();
-        }
+      if (level <= PARALLEL_CUTOFF_LEVEL) {
+        _searchAll(node, level, consumer);
+        return;
       }
+      var tasks = new ArrayList<RecursiveAction>();
+      for (int i = 0; i < node.count; i++) {
+        tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer));
+      }
+      invokeAll(tasks);
     }
   }
 }

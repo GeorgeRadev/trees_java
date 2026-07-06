@@ -193,14 +193,14 @@ public class RTreeTest {
       }
     }
 
-    { // test all parallel
-      final int[] counter = new int[] { 0 };
+    { // test all parallel - consumer must be thread-safe (getAllParallel forks)
+      final var counter = new AtomicInteger(0);
       Consumer<Range> consumer = (e) -> {
-        counter[0]++;
+        counter.incrementAndGet();
       };
 
       rtree.getAllParallel(consumer);
-      if (counter[0] != elementsCount || rtree.size() != elementsCount) {
+      if (counter.get() != elementsCount || rtree.size() != elementsCount) {
         throw new RuntimeException("count does not match");
       }
     }
@@ -365,6 +365,7 @@ public class RTreeTest {
   void validateIndex(RTree<?, ?> rtree) {
     if (validateIndex) {
       rtree._validateIndex();
+      rtree._validateStructure();
     }
   }
 
