@@ -1,7 +1,5 @@
 package trees;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
@@ -60,13 +58,16 @@ public class RTreeTest {
     }
 
     @Override
-    public int compareTo(Object o) {
-      var b = ((RangeBox) o);
-      if (s == b.s) {
-        return e - b.e;
-      } else {
-        return s - b.s;
-      }
+    public long measure() {
+      return e - s;
+    }
+
+    @Override
+    public long intersectionVolume(RBox box) {
+      var b = ((RangeBox) box);
+      long lo = Math.max(s, b.s);
+      long hi = Math.min(e, b.e);
+      return Math.max(0, hi - lo);
     }
   }
 
@@ -99,44 +100,6 @@ public class RTreeTest {
 
     public static String toRangeKey(Range r) {
       return r.id;
-    }
-  }
-
-  @Test
-  public void testRangeBox() {
-    {
-      var a = new RangeBox(0, 98);
-      var b = new RangeBox(93, 139);
-      var boxes = new RangeBox[] { a, b };
-      var box = new RangeBox(10, 120);
-
-      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-      assertEquals(1, ix);
-    }
-    {
-      var a = new RangeBox(0, 98);
-      var b = new RangeBox(93, 139);
-      var boxes = new RangeBox[] { a, b };
-      var box = new RangeBox(153, 181);
-
-      var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-      assertEquals(2, ix);
-    }
-    {
-      var a = new RangeBox(0, 98);
-      var b = new RangeBox(93, 139);
-      var c = new RangeBox(120, 180);
-      var boxes = new RangeBox[] { a, b, c };
-      {
-        var box = new RangeBox(153, 181);
-        var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-        assertEquals(3, ix);
-      }
-      {
-        var box = new RangeBox(100, 140);
-        var ix = RTree.binarySearch(boxes, 0, boxes.length, box);
-        assertEquals(2, ix);
-      }
     }
   }
 

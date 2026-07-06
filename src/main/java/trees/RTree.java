@@ -2,7 +2,6 @@ package trees;
 
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveAction;
 import java.util.function.Consumer;
@@ -215,37 +214,39 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     return oldValue;
   }
 
-  // modified binary search for getting the place to insert also as search closest
-  static int binarySearch(Object[] a, int fromIndex, int toIndex, Object key) {
-    if (fromIndex == toIndex) {
-      return fromIndex;
-    } else if (fromIndex > toIndex) {
-      throw new IllegalArgumentException(
-          "fromIndex(" + fromIndex + ") > toIndex(" + toIndex + ")");
+  // Choose the child of an internal node to descend into for the given box:
+  // minimise the increase in overlap with the other children, tie-broken by least
+  // MBR enlargement, then least resulting measure. Correct on disjoint data, where
+  // a raw max-overlap rule would give a meaningless all-zero tie.
+  private int chooseSubtree(Node<VALUE> node, RBox target) {
+    int best = -1;
+    long bestOverlapDelta = Long.MAX_VALUE;
+    long bestEnlargement = Long.MAX_VALUE;
+    long bestMeasure = Long.MAX_VALUE;
+    for (int i = 0; i < node.count; i++) {
+      RBox ci = node.getBox(i);
+      RBox enlarged = ci.clone();
+      target.union(enlarged); // enlarged = ci ∪ target
+      long overlapDelta = 0L;
+      for (int j = 0; j < node.count; j++) {
+        if (j == i) {
+          continue;
+        }
+        RBox cj = node.getBox(j);
+        overlapDelta += enlarged.intersectionVolume(cj) - ci.intersectionVolume(cj);
+      }
+      long enlargement = enlarged.measure() - ci.measure();
+      long measure = enlarged.measure();
+      if (overlapDelta < bestOverlapDelta
+          || (overlapDelta == bestOverlapDelta && enlargement < bestEnlargement)
+          || (overlapDelta == bestOverlapDelta && enlargement == bestEnlargement && measure < bestMeasure)) {
+        best = i;
+        bestOverlapDelta = overlapDelta;
+        bestEnlargement = enlargement;
+        bestMeasure = measure;
+      }
     }
-    if (fromIndex < 0) {
-      throw new ArrayIndexOutOfBoundsException(fromIndex);
-    }
-    if (toIndex > a.length) {
-      throw new ArrayIndexOutOfBoundsException(toIndex);
-    }
-    int low = fromIndex;
-    int high = toIndex - 1;
-    int mid;
-    int cmp = 0;
-
-    while (low <= high) {
-      mid = (low + high) >>> 1;
-      cmp = ((Comparable) a[mid]).compareTo(key);
-
-      if (cmp < 0)
-        low = mid + 1;
-      else if (cmp > 0)
-        high = mid - 1;
-      else
-        return mid;
-    }
-    return low;
+    return best;
   }
 
   // return new node if added
@@ -253,9 +254,8 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     if (level == 0) {
       // value node
       if (node.count < ORDER) {
-        // insert into the current node
-        int ix = binarySearch(node.boxes, 0, node.count, context.box);
-        node.insert(ix, context.box, context.value);
+        // leaf order is irrelevant (search scans all entries), so just append
+        node.insert(node.count, context.box, context.value);
         _updateIndex(context.key, context.value, node);
         if (node.parent != null) {
           node.parent._updateUpward();
@@ -267,24 +267,8 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         return secondNode;
       }
     } else {
-      // tree node
-      var box = context.box;
-      // find least changable box to insert
-      int ix = -1;
-      for (int i = 0; i < node.count; i++) {
-        if (((RBox) node.boxes[i]).intersect(box) == IntersectResult.CONTAINS) {
-          ix = i;
-          break;
-        }
-      }
-      if (ix < 0) {
-        // we have collision in boxes
-        ix = binarySearch(node.boxes, 0, node.count, box);
-        if (ix >= node.count) {
-          ix = node.count - 1;
-        }
-      }
-      // insert at position ix
+      // tree node - descend into the best-fit child (min overlap increase)
+      int ix = chooseSubtree(node, context.box);
       var newNode = _insert(node.getChild(ix), level - 1, context);
 
       if (newNode == null) {
@@ -317,76 +301,123 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     indexKey.put(key, ref);
   }
 
-  public static class ArrayIndexComparator implements Comparator<Integer> {
-    private final RBox[] array;
-
-    public ArrayIndexComparator(RBox[] array) {
-      this.array = array;
-    }
-
-    @Override
-    public int compare(Integer index1, Integer index2) {
-      return (array[index1]).compareTo(array[index2]);
-    }
-  }
-
+  // Quadratic split (Guttman): distribute this node's ORDER entries plus one new
+  // entry (appendNode for an internal split, or context.value for a leaf split)
+  // into `node` and a new sibling, minimising wasted coverage. Uses only
+  // measure()/union() from RBox, so it works on opaque N-D geometry.
   private Node<VALUE> _splitAndAdd(Node<VALUE> node, InsertContext<KEY, VALUE> context, Node<VALUE> appendNode) {
-    // rearange children to the distance index
-    final var indexes = new Integer[ORDER + 1];
-    final var boxes = new RBox[ORDER + 1];
-    final var children = new Object[ORDER + 1];
+    final int n = ORDER + 1;
+    final RBox[] bx = new RBox[n];
+    final Object[] ch = new Object[n];
     for (int i = 0; i < ORDER; i++) {
-      indexes[i] = Integer.valueOf(i);
-      boxes[i] = (RBox) node.boxes[i];
-      children[i] = node.children[i];
+      bx[i] = (RBox) node.boxes[i];
+      ch[i] = node.children[i];
     }
-    indexes[ORDER] = ORDER;
-    boxes[ORDER] = (appendNode != null) ? appendNode.getBox() : (RBox) (context.box);
-    children[ORDER] = (appendNode != null) ? appendNode : context.value;
+    final int newEntry = ORDER;
+    bx[newEntry] = (appendNode != null) ? appendNode.getBox() : context.box;
+    ch[newEntry] = (appendNode != null) ? appendNode : context.value;
 
-    // arange indexes by the order
-    Arrays.sort(indexes, new ArrayIndexComparator(boxes));
-
-    // split
-    final var pivot = (ORDER + 2) >> 1;
-    var newNode = new Node<VALUE>(ORDER);
-    Arrays.fill(node.boxes, pivot, ORDER, null);
-    Arrays.fill(node.children, pivot, ORDER, null);
-    node.count = pivot;
-    newNode.count = ORDER + 1 - pivot;
-    newNode.parent = node.parent;
-    // order nodes
-    int newIndex = 0;
-    for (int i = 0; i <= ORDER; i++) {
-      var ix = indexes[i].intValue();
-      if (ix == ORDER) {
-        newIndex = i;
+    // PickSeeds: the pair that would waste the most coverage if kept together
+    int seedA = 0, seedB = 1;
+    long worst = Long.MIN_VALUE;
+    for (int i = 0; i < n; i++) {
+      for (int j = i + 1; j < n; j++) {
+        RBox u = bx[i].clone();
+        bx[j].union(u); // u = bx[i] ∪ bx[j]
+        long d = u.measure() - bx[i].measure() - bx[j].measure();
+        if (d > worst) {
+          worst = d;
+          seedA = i;
+          seedB = j;
+        }
       }
-      if (i < pivot) {
-        node.boxes[i] = boxes[ix];
-        node.children[i] = children[ix];
+    }
+
+    // grow two groups from the seeds by least enlargement
+    final int[] group = new int[n];
+    Arrays.fill(group, -1);
+    group[seedA] = 0;
+    group[seedB] = 1;
+    RBox mbrA = bx[seedA].clone();
+    RBox mbrB = bx[seedB].clone();
+    int countA = 1, countB = 1;
+    int assigned = 2;
+    final int minFill = (ORDER + 1) >> 1;
+    while (assigned < n) {
+      int k = -1;
+      for (int t = 0; t < n; t++) {
+        if (group[t] == -1) {
+          k = t;
+          break;
+        }
+      }
+      int remaining = n - assigned; // still-unassigned entries, including k
+      if (countA + remaining <= minFill) {
+        group[k] = 0;
+        bx[k].union(mbrA);
+        countA++;
+      } else if (countB + remaining <= minFill) {
+        group[k] = 1;
+        bx[k].union(mbrB);
+        countB++;
       } else {
-        int j = i - pivot;
-        newNode.boxes[j] = boxes[ix];
-        newNode.children[j] = children[ix];
+        long enlA = mbrA.enlargement(bx[k]);
+        long enlB = mbrB.enlargement(bx[k]);
+        boolean toA;
+        if (enlA != enlB) {
+          toA = enlA < enlB;
+        } else if (mbrA.measure() != mbrB.measure()) {
+          toA = mbrA.measure() < mbrB.measure();
+        } else {
+          toA = countA <= countB;
+        }
+        if (toA) {
+          group[k] = 0;
+          bx[k].union(mbrA);
+          countA++;
+        } else {
+          group[k] = 1;
+          bx[k].union(mbrB);
+          countB++;
+        }
+      }
+      assigned++;
+    }
+
+    // write group 0 back into node, group 1 into the new sibling
+    var newNode = new Node<VALUE>(ORDER);
+    newNode.parent = node.parent;
+    Arrays.fill(node.boxes, 0, node.count, null);
+    Arrays.fill(node.children, 0, node.count, null);
+    node.count = 0;
+    for (int k = 0; k < n; k++) {
+      if (group[k] == 0) {
+        node.boxes[node.count] = bx[k];
+        node.children[node.count] = ch[k];
+        node.count++;
+      } else {
+        newNode.boxes[newNode.count] = bx[k];
+        newNode.children[newNode.count] = ch[k];
+        newNode.count++;
       }
     }
+
     if (appendNode == null) {
-      // update index refs
+      // leaf split: values that moved to newNode must be re-indexed there; values
+      // that stayed in node keep their existing (node) index. The brand-new value
+      // is indexed wherever it landed.
       for (int i = 0; i < newNode.count; i++) {
         VALUE value = (VALUE) newNode.children[i];
         _updateIndex(toKey.apply(value), value, newNode);
       }
-      if (newIndex < pivot) {
-        // update new element index if needed
-        VALUE value = (VALUE) node.children[newIndex];
-        _updateIndex(toKey.apply(value), value, node);
+      if (group[newEntry] == 0) {
+        _updateIndex(context.key, context.value, node);
       }
     } else {
-      // update parents
+      // internal split: reparent the children that moved to newNode (children that
+      // stayed, and appendNode wherever it landed, already point at the right node)
       for (int i = 0; i < newNode.count; i++) {
-        var child = newNode.getChild(i);
-        child.parent = newNode;
+        newNode.getChild(i).parent = newNode;
       }
     }
     return newNode;
