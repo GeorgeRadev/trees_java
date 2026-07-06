@@ -118,16 +118,19 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
   }
 
   /**
-   * Iterate over values within key range.
+   * Iterate over values within the key range, <b>inclusive on both ends</b>:
+   * {@code [start, end]}. A {@code null} bound means unbounded on that side.
    *
-   * @param start start ot the search interval
-   * @param end   end of the search interval
-   * @return iterator for the assoiated values mathing the search interval
+   * @param start start of the search interval (inclusive), or {@code null} for no
+   *              lower bound
+   * @param end   end of the search interval (inclusive), or {@code null} for no
+   *              upper bound
+   * @return iterator for the associated values matching the search interval
    * @throws IllegalArgumentException if {@code start} is greater than {@code end}
    */
   public Iterator<VALUE> range(KEY start, KEY end) {
     if (start != null && end != null && start.compareTo(end) > 0) {
-      throw new IllegalArgumentException("Value supplier cannot be null");
+      throw new IllegalArgumentException("start must not be greater than end");
     }
     var context = new SearchContext<KEY, VALUE>();
     if (start != null) {
@@ -232,18 +235,24 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
     if (level == 0) {
       // value node
       if (ix >= 0 && ix < node.count) {
-        // found the element - overwrite if needed
+        // found the element
         if (context.value != null) {
+          // put: overwrite and return the previous value
           var t = node.getValue(ix);
           node.children[ix] = context.value;
           context.value = t;
+        } else {
+          // computeIfAbsent: key present, return the existing value (no overwrite)
+          context.value = node.getValue(ix);
         }
         return null;
       } else {
         if (ix < 0) {
           ix = -ix - 1;
         }
-        // needs to insert/append
+        // new key: put supplies context.value; computeIfAbsent computes it.
+        // Capture the mode before the shared context.value slot is overwritten.
+        final boolean wasPut = context.value != null;
         if (context.value == null) {
           context.value = context.valueFunction.get();
           if (context.value == null) {
@@ -251,23 +260,30 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
           }
         }
         size++;
+        final VALUE inserted = context.value;
+        Node<KEY, VALUE> result;
         if (node.count < ORDER) {
           // insert into the current node
           if (ix >= node.count) {
-            node.append(key, context.value);
+            node.append(key, inserted);
           } else {
-            node.insert(ix, key, context.value);
+            node.insert(ix, key, inserted);
           }
-          return null;
+          result = null;
         } else {
           // split and insert
           var firstNode = (LeafNode<KEY, VALUE>) node;
-          var secondNode = (LeafNode<KEY, VALUE>) _splitAndAdd(node, level, key, context.value, ix);
+          var secondNode = (LeafNode<KEY, VALUE>) _splitAndAdd(node, level, key, inserted, ix);
           secondNode.next = firstNode.next;
           // secondNode.prev = firstNode;
           firstNode.next = secondNode;
-          return secondNode;
+          result = secondNode;
         }
+        if (wasPut) {
+          // put of a new key has no previous value
+          context.value = null;
+        }
+        return result;
       }
     } else {
       // tree node
@@ -459,13 +475,16 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
 
     @Override
     public boolean hasNext() {
-      if(node == null){
+      // roll past exhausted or empty leaves before checking the range bound;
+      // _search can land us at index == count, and next leaves may be empty
+      while (node != null && index >= node.count) {
+        node = node.next;
+        index = 0;
+      }
+      if (node == null) {
         return false;
       }
-      if (index < node.count && (end == null || end.compareTo((KEY) (node.keys[index])) > 0)) {
-        return true;
-      }
-      return false;
+      return end == null || end.compareTo((KEY) (node.keys[index])) >= 0;
     }
 
     @Override

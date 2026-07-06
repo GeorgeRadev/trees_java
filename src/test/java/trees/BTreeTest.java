@@ -63,7 +63,7 @@ public class BTreeTest {
         oldV = v;
         c++;
       }
-      if (c != end - start) {
+      if (c != end - start + 1) { // range is inclusive on both ends: [start, end]
         throw new RuntimeException("range does not match");
       }
     }
@@ -82,7 +82,7 @@ public class BTreeTest {
         oldV = v;
         c++;
       }
-      if (c != end) {
+      if (c != end + 1) { // inclusive end, unbounded start: keys 0..end
         throw new RuntimeException("range does not match");
       }
     }

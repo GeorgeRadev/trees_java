@@ -133,16 +133,18 @@ public class BTreeLong<VALUE> {
   }
 
   /**
-   * Iterate over values within key range.
+   * Iterate over values within the key range, <b>inclusive on both ends</b>:
+   * {@code [start, end]}. For an unbounded scan use
+   * {@code range(Long.MIN_VALUE, Long.MAX_VALUE)}.
    *
-   * @param start start ot the search interval
-   * @param end   end of the search interval
-   * @return iterator for the assoiated values mathing the search interval
+   * @param start start of the search interval (inclusive)
+   * @param end   end of the search interval (inclusive)
+   * @return iterator for the associated values matching the search interval
    * @throws IllegalArgumentException if {@code start} is greater than {@code end}
    */
   public Iterator<VALUE> range(long start, long end) {
     if (start > end) {
-      throw new IllegalArgumentException("Value supplier cannot be null");
+      throw new IllegalArgumentException("start must not be greater than end");
     }
     var context = new SearchContext<VALUE>();
     _search(root, height, start, context);
@@ -229,18 +231,24 @@ public class BTreeLong<VALUE> {
     if (level == 0) {
       // value node
       if (ix >= 0 && ix < node.count) {
-        // found the element - overwrite if needed
+        // found the element
         if (context.value != null) {
+          // put: overwrite and return the previous value
           var t = node.getValue(ix);
           node.children[ix] = context.value;
           context.value = t;
+        } else {
+          // computeIfAbsent: key present, return the existing value (no overwrite)
+          context.value = node.getValue(ix);
         }
         return null;
       } else {
         if (ix < 0) {
           ix = -ix - 1;
         }
-        // needs to insert/append
+        // new key: put supplies context.value; computeIfAbsent computes it.
+        // Capture the mode before the shared context.value slot is overwritten.
+        final boolean wasPut = context.value != null;
         if (context.value == null) {
           context.value = context.valueFunction.get();
           if (context.value == null) {
@@ -248,19 +256,26 @@ public class BTreeLong<VALUE> {
           }
         }
         size++;
+        final Object inserted = context.value;
+        Node<VALUE> result;
         if (node.count < ORDER) {
           // insert into the current node
-          node.insert(ix, key, context.value);
-          return null;
+          node.insert(ix, key, inserted);
+          result = null;
         } else {
           // split and insert
           var firstNode = (LeafNode<VALUE>) node;
-          var secondNode = (LeafNode<VALUE>) splitAndAdd(node, level, key, context.value, ix);
+          var secondNode = (LeafNode<VALUE>) splitAndAdd(node, level, key, inserted, ix);
           secondNode.next = firstNode.next;
           // secondNode.prev = firstNode;
           firstNode.next = secondNode;
-          return secondNode;
+          result = secondNode;
         }
+        if (wasPut) {
+          // put of a new key has no previous value
+          context.value = null;
+        }
+        return result;
       }
     } else {
       // tree node
@@ -458,13 +473,16 @@ public class BTreeLong<VALUE> {
 
     @Override
     public boolean hasNext() {
+      // roll past exhausted or empty leaves before checking the range bound;
+      // _search can land us at index == count, and next leaves may be empty
+      while (node != null && index >= node.count) {
+        node = node.next;
+        index = 0;
+      }
       if (node == null) {
         return false;
       }
-      if (index < node.count && node.keys[index] <= end) {
-        return true;
-      }
-      return false;
+      return node.keys[index] <= end;
     }
 
     @Override
