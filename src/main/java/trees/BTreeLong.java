@@ -58,6 +58,36 @@ public class BTreeLong<VALUE> {
   }
 
   /**
+   * @return the smallest key in the tree
+   * @throws NoSuchElementException if the tree is empty
+   */
+  public long getMinKey() {
+    if (size == 0) {
+      return Long.MIN_VALUE;
+    }
+    Node<VALUE> node = root;
+    for (int l = height; l > 0; l--) {
+      node = node.getChild(0);
+    }
+    return node.keys[0];
+  }
+
+  /**
+   * @return the largest key in the tree
+   * @throws NoSuchElementException if the tree is empty
+   */
+  public long getMaxKey() {
+    if (size == 0) {
+      return Long.MAX_VALUE;
+    }
+    Node<VALUE> node = root;
+    for (int l = height; l > 0; l--) {
+      node = node.getChild(node.count - 1);
+    }
+    return node.keys[node.count - 1];
+  }
+
+  /**
    * Returns the value associated with the given key.
    *
    * @param key the key
@@ -151,6 +181,25 @@ public class BTreeLong<VALUE> {
     // context.start = start;
     context.end = end;
     return context;
+  }
+
+  /**
+   * Iterate over key&rarr;value entries within the key range, inclusive on both
+   * ends: {@code [start, end]}.
+   *
+   * @param start start of the search interval (inclusive)
+   * @param end   end of the search interval (inclusive)
+   * @return iterator over {@link Entry} for the matching keys
+   * @throws IllegalArgumentException if {@code start} is greater than {@code end}
+   */
+  public Iterator<Entry<VALUE>> rangeEntries(long start, long end) {
+    if (start > end) {
+      throw new IllegalArgumentException("start must not be greater than end");
+    }
+    var context = new SearchContext<VALUE>();
+    _search(root, height, start, context);
+    context.end = end;
+    return context.entries();
   }
 
   /**
@@ -328,7 +377,7 @@ public class BTreeLong<VALUE> {
             var firstNode = node.getChild(i - 1);
             var secondNode = node.getChild(i);
             // try to merge
-            if (firstNode.count + secondNode.count < ORDER) {
+            if (firstNode.count + secondNode.count <= ORDER) {
               // we have enough space to merge both nodes
               firstNode.merge(secondNode);
               if (level == 1) {
@@ -459,6 +508,10 @@ public class BTreeLong<VALUE> {
     LeafNode<VALUE> next;
   }
 
+  /** A key&rarr;value pair yielded by {@link #rangeEntries(long, long)}. */
+  public record Entry<VALUE>(long key, VALUE value) {
+  }
+
   private static class InsertContext<VALUE> {
     VALUE value;
     Supplier<VALUE> valueFunction;
@@ -485,9 +538,8 @@ public class BTreeLong<VALUE> {
       return node.keys[index] <= end;
     }
 
-    @Override
-    public VALUE next() {
-      VALUE v = node.getValue(index);
+    // advance past the current element (rolls over exhausted/empty leaves)
+    private void step() {
       index++;
       if (index >= node.count) {
         index = 0;
@@ -495,7 +547,31 @@ public class BTreeLong<VALUE> {
           node = node.next;
         } while (node != null && node.count <= 0);
       }
+    }
+
+    @Override
+    public VALUE next() {
+      VALUE v = node.getValue(index);
+      step();
       return v;
+    }
+
+    // entry view over the same cursor - shares hasNext/step so the range rollover
+    // logic lives in one place
+    Iterator<Entry<VALUE>> entries() {
+      return new Iterator<>() {
+        @Override
+        public boolean hasNext() {
+          return SearchContext.this.hasNext();
+        }
+
+        @Override
+        public Entry<VALUE> next() {
+          var e = new Entry<>(node.keys[index], node.getValue(index));
+          step();
+          return e;
+        }
+      };
     }
   }
 }

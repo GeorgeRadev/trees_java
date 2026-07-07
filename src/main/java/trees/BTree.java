@@ -43,6 +43,36 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
   }
 
   /**
+   * @return the smallest key in the tree
+   * @throws NoSuchElementException if the tree is empty
+   */
+  public KEY getMinKey() {
+    if (size == 0) {
+      return null;
+    }
+    Node<KEY, VALUE> node = root;
+    for (int l = height; l > 0; l--) {
+      node = node.getChild(0);
+    }
+    return (KEY) node.keys[0];
+  }
+
+  /**
+   * @return the largest key in the tree
+   * @throws NoSuchElementException if the tree is empty
+   */
+  public KEY getMaxKey() {
+    if (size == 0) {
+      return null;
+    }
+    Node<KEY, VALUE> node = root;
+    for (int l = height; l > 0; l--) {
+      node = node.getChild(node.count - 1);
+    }
+    return (KEY) node.keys[node.count - 1];
+  }
+
+  /**
    * Returns the value associated with the given key.
    *
    * @param key the key
@@ -146,6 +176,33 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
     // context.start = start;
     context.end = end;
     return context;
+  }
+
+  /**
+   * Iterate over key&rarr;value entries within the key range, inclusive on both
+   * ends: {@code [start, end]}. A {@code null} bound means unbounded on that side.
+   *
+   * @param start start of the search interval (inclusive), or {@code null}
+   * @param end   end of the search interval (inclusive), or {@code null}
+   * @return iterator over {@link Entry} for the matching keys
+   * @throws IllegalArgumentException if {@code start} is greater than {@code end}
+   */
+  public Iterator<Entry<KEY, VALUE>> rangeEntries(KEY start, KEY end) {
+    if (start != null && end != null && start.compareTo(end) > 0) {
+      throw new IllegalArgumentException("start must not be greater than end");
+    }
+    var context = new SearchContext<KEY, VALUE>();
+    if (start != null) {
+      _search(root, height, start, context);
+    } else {
+      context.node = (LeafNode<KEY, VALUE>) level0;
+      context.index = 0;
+      if (level0.count > 0) {
+        context.value = level0.getValue(0);
+      }
+    }
+    context.end = end;
+    return context.entries();
   }
 
   /**
@@ -340,7 +397,7 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
             var firstNode = node.getChild(i - 1);
             var secondNode = node.getChild(i);
             // try to merge
-            if (firstNode.count + secondNode.count < ORDER) {
+            if (firstNode.count + secondNode.count <= ORDER) {
               // we have enough space to merge both nodes
               firstNode.merge(secondNode);
               if (level == 1) {
@@ -462,6 +519,10 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
     LeafNode<KEY, VALUE> next;
   }
 
+  /** A key&rarr;value pair yielded by {@link #rangeEntries(Comparable, Comparable)}. */
+  public record Entry<KEY, VALUE>(KEY key, VALUE value) {
+  }
+
   private static class InsertContext<VALUE> {
     VALUE value;
     Supplier<VALUE> valueFunction;
@@ -487,9 +548,8 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
       return end == null || end.compareTo((KEY) (node.keys[index])) >= 0;
     }
 
-    @Override
-    public VALUE next() {
-      VALUE v = node.getValue(index);
+    // advance past the current element (rolls over exhausted/empty leaves)
+    private void step() {
       index++;
       if (index >= node.count) {
         index = 0;
@@ -497,7 +557,31 @@ public class BTree<KEY extends Comparable<KEY>, VALUE> {
           node = node.next;
         } while (node != null && node.count <= 0);
       }
+    }
+
+    @Override
+    public VALUE next() {
+      VALUE v = node.getValue(index);
+      step();
       return v;
+    }
+
+    // entry view over the same cursor - shares hasNext/step so the range rollover
+    // logic lives in one place
+    Iterator<Entry<KEY, VALUE>> entries() {
+      return new Iterator<>() {
+        @Override
+        public boolean hasNext() {
+          return SearchContext.this.hasNext();
+        }
+
+        @Override
+        public Entry<KEY, VALUE> next() {
+          var e = new Entry<KEY, VALUE>((KEY) node.keys[index], node.getValue(index));
+          step();
+          return e;
+        }
+      };
     }
   }
 }

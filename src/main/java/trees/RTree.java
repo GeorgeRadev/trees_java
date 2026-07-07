@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.RecursiveAction;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import trees.RBox.IntersectResult;
 
@@ -116,56 +117,58 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
   }
 
   /**
-   * Gets all values intersecting with a box.
+   * Gets all values intersecting with a box. Lazy pull: {@code consumer} returns
+   * {@code true} to keep receiving values, {@code false} to stop the traversal.
    *
    * @param box      box to intersect with.
-   * @param consumer callback for the values.
-   * @return Array of values mathing the box.
+   * @param consumer callback; return {@code true} to continue, {@code false} to stop.
    */
-  public void intersect(RBox box, Consumer<VALUE> consumer) {
+  public void intersect(RBox box, Predicate<VALUE> consumer) {
     _search(root, height, box, consumer);
   }
 
   /**
-   * Gets all values intersecting with a box in parallel.
-   * The consumer may be invoked concurrently from multiple threads and must be
-   * thread-safe.
+   * Gets all values intersecting with a box in parallel. The consumer may be
+   * invoked concurrently from multiple threads and must be thread-safe. Returning
+   * {@code false} requests stop; in-flight leaves may still finish (best-effort).
    *
    * @param box      box to intersect with.
-   * @param consumer callback for the values.
+   * @param consumer callback; return {@code true} to continue, {@code false} to stop.
    */
-  public void intersectParallel(RBox box, Consumer<VALUE> consumer) {
-    var action = new SearchAction(root, height, box, consumer);
+  public void intersectParallel(RBox box, Predicate<VALUE> consumer) {
+    var action = new SearchAction(root, height, box, consumer, new AtomicBoolean(false));
     executeTask(action, 0);
   }
 
   /**
    * Gets all values intersecting with a box in parallel with specified threads.
    * The consumer may be invoked concurrently from multiple threads and must be
-   * thread-safe.
+   * thread-safe. Returning {@code false} requests stop (best-effort).
    *
    * @param box             box to intersect with.
-   * @param consumer        callback for the values.
+   * @param consumer        callback; return {@code true} to continue, {@code false} to stop.
    * @param parallelThreads number of threads in the pool.
    */
-  public void intersectParallel(RBox box, Consumer<VALUE> consumer, int parallelThreads) {
-    var action = new SearchAction(root, height, box, consumer);
+  public void intersectParallel(RBox box, Predicate<VALUE> consumer, int parallelThreads) {
+    var action = new SearchAction(root, height, box, consumer, new AtomicBoolean(false));
     executeTask(action, parallelThreads);
   }
 
   /**
-   * @return all values from the tree.
+   * Traverses all values. Lazy pull: {@code consumer} returns {@code true} to keep
+   * receiving values, {@code false} to stop.
    */
-  public void getAll(Consumer<VALUE> consumer) {
+  public void getAll(Predicate<VALUE> consumer) {
     _searchAll(root, height, consumer);
   }
 
   /**
-   * Traverses all values from the tree in parallel. The consumer may be invoked
-   * concurrently from multiple threads and must be thread-safe.
+   * Traverses all values in parallel. The consumer may be invoked concurrently
+   * from multiple threads and must be thread-safe. Returning {@code false} requests
+   * stop (best-effort).
    */
-  public void getAllParallel(Consumer<VALUE> consumer) {
-    var action = new SearchAllAction(root, height, consumer);
+  public void getAllParallel(Predicate<VALUE> consumer) {
+    var action = new SearchAllAction(root, height, consumer, new AtomicBoolean(false));
     executeTask(action, 0);
   }
 
@@ -464,13 +467,18 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     }
   }
 
-  private static <VALUE> void _search(Node<VALUE> node, int level, RBox box, Consumer<VALUE> consumer) {
+  // returns false if the consumer asked to stop (no more elements required)
+  private static <VALUE> boolean _search(Node<VALUE> node, int level, RBox box, Predicate<VALUE> consumer) {
     if (level == 0) {
       // values
       for (int i = 0; i < node.count; i++) {
         var b = node.getBox(i);
         switch (box.intersect(b)) {
-          case CONTAINS, INTERSECTS -> consumer.accept(node.getValue(i));
+          case CONTAINS, INTERSECTS -> {
+            if (!consumer.test(node.getValue(i))) {
+              return false;
+            }
+          }
           case NO_COLLISION -> {
             /* nothing to do */}
         }
@@ -480,27 +488,42 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       for (int i = 0; i < node.count; i++) {
         var b = node.getBox(i);
         switch (box.intersect(b)) {
-          case CONTAINS -> _searchAll(node.getChild(i), level - 1, consumer);
-          case INTERSECTS -> _search(node.getChild(i), level - 1, box, consumer);
+          case CONTAINS -> {
+            if (!_searchAll(node.getChild(i), level - 1, consumer)) {
+              return false;
+            }
+          }
+          case INTERSECTS -> {
+            if (!_search(node.getChild(i), level - 1, box, consumer)) {
+              return false;
+            }
+          }
           case NO_COLLISION -> {
             /* nothing to do */}
         }
       }
     }
+    return true;
   }
 
-  private static <VALUE> void _searchAll(Node<VALUE> node, int level, Consumer<VALUE> consumer) {
+  // returns false if the consumer asked to stop (no more elements required)
+  private static <VALUE> boolean _searchAll(Node<VALUE> node, int level, Predicate<VALUE> consumer) {
     if (level == 0) {
       // values
       for (int i = 0; i < node.count; i++) {
-        consumer.accept(node.getValue(i));
+        if (!consumer.test(node.getValue(i))) {
+          return false;
+        }
       }
     } else {
       // nodes
       for (int i = 0; i < node.count; i++) {
-        _searchAll(node.getChild(i), level - 1, consumer);
+        if (!_searchAll(node.getChild(i), level - 1, consumer)) {
+          return false;
+        }
       }
     }
+    return true;
   }
 
   private String _toString(Node<VALUE> node, int level, String indent) {
@@ -688,29 +711,36 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
     private final Node<VALUE> node;
     private final int level;
     private final RBox box;
-    private final Consumer<VALUE> consumer;
+    private final Predicate<VALUE> consumer;
+    private final AtomicBoolean stop;
 
-    public SearchAction(Node<VALUE> node, int level, RBox box, Consumer<VALUE> consumer) {
+    public SearchAction(Node<VALUE> node, int level, RBox box, Predicate<VALUE> consumer, AtomicBoolean stop) {
       this.node = node;
       this.level = level;
       this.box = box;
       this.consumer = consumer;
+      this.stop = stop;
     }
 
     @Override
     protected void compute() {
+      if (stop.get()) {
+        return;
+      }
       if (level <= PARALLEL_CUTOFF_LEVEL) {
         // small subtree - traverse sequentially
-        _search(node, level, box, consumer);
+        if (!_search(node, level, box, consumer)) {
+          stop.set(true);
+        }
         return;
       }
       // fan out: fork a task per intersecting child, then join them all
       var tasks = new ArrayList<RecursiveAction>();
-      for (int i = 0; i < node.count; i++) {
+      for (int i = 0; i < node.count && !stop.get(); i++) {
         var b = node.getBox(i);
         switch (box.intersect(b)) {
-          case CONTAINS -> tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer));
-          case INTERSECTS -> tasks.add(new SearchAction<>(node.getChild(i), level - 1, box, consumer));
+          case CONTAINS -> tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer, stop));
+          case INTERSECTS -> tasks.add(new SearchAction<>(node.getChild(i), level - 1, box, consumer, stop));
           case NO_COLLISION -> {
             /* nothing to do */}
         }
@@ -722,23 +752,30 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
   private static class SearchAllAction<VALUE> extends RecursiveAction {
     private final Node<VALUE> node;
     private final int level;
-    private final Consumer<VALUE> consumer;
+    private final Predicate<VALUE> consumer;
+    private final AtomicBoolean stop;
 
-    public SearchAllAction(Node<VALUE> node, int level, Consumer<VALUE> consumer) {
+    public SearchAllAction(Node<VALUE> node, int level, Predicate<VALUE> consumer, AtomicBoolean stop) {
       this.node = node;
       this.level = level;
       this.consumer = consumer;
+      this.stop = stop;
     }
 
     @Override
     protected void compute() {
+      if (stop.get()) {
+        return;
+      }
       if (level <= PARALLEL_CUTOFF_LEVEL) {
-        _searchAll(node, level, consumer);
+        if (!_searchAll(node, level, consumer)) {
+          stop.set(true);
+        }
         return;
       }
       var tasks = new ArrayList<RecursiveAction>();
-      for (int i = 0; i < node.count; i++) {
-        tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer));
+      for (int i = 0; i < node.count && !stop.get(); i++) {
+        tasks.add(new SearchAllAction<>(node.getChild(i), level - 1, consumer, stop));
       }
       invokeAll(tasks);
     }

@@ -42,6 +42,12 @@ public class BTreeContractTest {
     List<V> getAll();
 
     int size();
+
+    long getMinKey();
+
+    long getMaxKey();
+
+    List<String> entriesInRange(long start, long end);
   }
 
   private static LongTree<String> btree(int order) {
@@ -74,6 +80,24 @@ public class BTreeContractTest {
 
       public int size() {
         return t.size();
+      }
+
+      public long getMinKey() {
+        return t.getMinKey();
+      }
+
+      public long getMaxKey() {
+        return t.getMaxKey();
+      }
+
+      public List<String> entriesInRange(long s, long e) {
+        var out = new ArrayList<String>();
+        var it = t.rangeEntries(s, e);
+        while (it.hasNext()) {
+          var en = it.next();
+          out.add(en.key() + "=" + en.value());
+        }
+        return out;
       }
     };
   }
@@ -108,6 +132,24 @@ public class BTreeContractTest {
 
       public int size() {
         return t.size();
+      }
+
+      public long getMinKey() {
+        return t.getMinKey();
+      }
+
+      public long getMaxKey() {
+        return t.getMaxKey();
+      }
+
+      public List<String> entriesInRange(long s, long e) {
+        var out = new ArrayList<String>();
+        var it = t.rangeEntries(s, e);
+        while (it.hasNext()) {
+          var en = it.next();
+          out.add(en.key() + "=" + en.value());
+        }
+        return out;
       }
     };
   }
@@ -206,6 +248,66 @@ public class BTreeContractTest {
       }
       assertEquals(10, t.size());
       assertEquals(List.of("0", "1", "2", "3", "4", "5", "6", "7", "8", "9"), t.getAll());
+    });
+  }
+
+  @TestFactory
+  Stream<DynamicTest> rangeEntriesYieldsKeyAndValue() {
+    return contract("rangeEntries yields key=value pairs inclusive on both ends", 4, t -> {
+      for (long i = 0; i <= 10; i++) {
+        t.put(i, "v" + i);
+      }
+      assertEquals(List.of("3=v3", "4=v4", "5=v5", "6=v6", "7=v7"), t.entriesInRange(3, 7));
+      assertEquals(List.of("0=v0"), t.entriesInRange(0, 0));
+      assertEquals(List.of(), t.entriesInRange(100, 200));
+    });
+  }
+
+  @TestFactory
+  Stream<DynamicTest> minMaxKey() {
+    return contract("getMinKey/getMaxKey after shuffled inserts and a delete", 3, t -> {
+      int[] keys = { 7, 1, 9, 3, 5, 0, 8, 2, 6, 4 };
+      for (int k : keys) {
+        t.put(k, String.valueOf(k));
+      }
+      assertEquals(0, t.getMinKey());
+      assertEquals(9, t.getMaxKey());
+      t.remove(0);
+      t.remove(9);
+      assertEquals(1, t.getMinKey(), "min tracks after deleting the smallest");
+      assertEquals(8, t.getMaxKey(), "max tracks after deleting the largest");
+    });
+  }
+
+  @TestFactory
+  Stream<DynamicTest> deleteFromBothEndsKeepsStructureConsistent() {
+    return contract("deleting alternately from min/max keeps getAll, size, min, max consistent", 3, t -> {
+      final int n = 50;
+      for (int i = 0; i < n; i++) {
+        t.put(i, String.valueOf(i));
+      }
+      var remaining = new java.util.TreeSet<Long>();
+      for (long i = 0; i < n; i++) {
+        remaining.add(i);
+      }
+      boolean fromLow = true;
+      while (!remaining.isEmpty()) {
+        long k = fromLow ? remaining.first() : remaining.last();
+        fromLow = !fromLow;
+        t.remove(k);
+        remaining.remove(k);
+        // no stranded empty node may perturb size / order / extremes
+        assertEquals(remaining.size(), t.size());
+        var expected = new ArrayList<String>();
+        for (long r : remaining) {
+          expected.add(String.valueOf(r));
+        }
+        assertEquals(expected, t.getAll());
+        if (!remaining.isEmpty()) {
+          assertEquals(remaining.first().longValue(), t.getMinKey());
+          assertEquals(remaining.last().longValue(), t.getMaxKey());
+        }
+      }
     });
   }
 

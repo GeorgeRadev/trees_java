@@ -1,7 +1,7 @@
 package trees;
 
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import org.junit.jupiter.api.Test;
 
@@ -15,6 +15,32 @@ public class RTreeTest {
     test(8, 64);
     validateIndex = false;
     test(64, 150_000);
+  }
+
+  @Test
+  public void testLazyPullEarlyExit() {
+    var rtree = new RTree<String, Range>(4, Range::toRangeKey, Range::toRangeBox);
+    for (int i = 0; i < 100; i++) {
+      rtree.add(new Range(String.valueOf(i), i * 10, i * 10 + 5));
+    }
+    // getAll stops once the consumer returns false
+    final int[] seen = { 0 };
+    rtree.getAll((e) -> {
+      seen[0]++;
+      return seen[0] < 5; // stop after the 5th element
+    });
+    if (seen[0] != 5) {
+      throw new RuntimeException("getAll lazy pull should stop at 5, saw " + seen[0]);
+    }
+    // intersect stops too
+    final int[] seen2 = { 0 };
+    rtree.intersect(new RangeBox(0, 100000), (e) -> {
+      seen2[0]++;
+      return seen2[0] < 3;
+    });
+    if (seen2[0] != 3) {
+      throw new RuntimeException("intersect lazy pull should stop at 3, saw " + seen2[0]);
+    }
   }
 
   public static class RangeBox implements RBox {
@@ -146,8 +172,9 @@ public class RTreeTest {
 
     { // test all
       final int[] counter = new int[] { 0 };
-      Consumer<Range> consumer = (e) -> {
+      Predicate<Range> consumer = (e) -> {
         counter[0]++;
+        return true;
       };
 
       rtree.getAll(consumer);
@@ -158,8 +185,9 @@ public class RTreeTest {
 
     { // test all parallel - consumer must be thread-safe (getAllParallel forks)
       final var counter = new AtomicInteger(0);
-      Consumer<Range> consumer = (e) -> {
+      Predicate<Range> consumer = (e) -> {
         counter.incrementAndGet();
+        return true;
       };
 
       rtree.getAllParallel(consumer);
@@ -175,8 +203,9 @@ public class RTreeTest {
 
       final int[] counter = new int[] { 0 };
       {
-        Consumer<Range> consumer = (e) -> {
+        Predicate<Range> consumer = (e) -> {
           counter[0]++;
+          return true;
         };
 
         rtree.intersect(box, consumer);
@@ -186,8 +215,9 @@ public class RTreeTest {
       }
       final var counterParallel = new AtomicInteger(0);
       {
-        Consumer<Range> consumer = (e) -> {
+        Predicate<Range> consumer = (e) -> {
           counterParallel.incrementAndGet();
+          return true;
         };
 
         rtree.intersectParallel(box, consumer);
@@ -197,8 +227,9 @@ public class RTreeTest {
       }
       final var counterParallelN = new AtomicInteger(0);
       {
-        Consumer<Range> consumer = (e) -> {
+        Predicate<Range> consumer = (e) -> {
           counterParallelN.incrementAndGet();
+          return true;
         };
 
         rtree.intersectParallel(box, consumer, 8);
@@ -297,11 +328,12 @@ public class RTreeTest {
       }
       {
         final int[] counter = new int[] { 0 };
-        Consumer<Range> consumer = (e) -> {
+        Predicate<Range> consumer = (e) -> {
           if (e == null) {
             throw new RuntimeException("element should not be null");
           }
           counter[0]++;
+          return true;
         };
 
         rtree.getAll(consumer);
