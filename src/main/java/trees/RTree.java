@@ -260,9 +260,6 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
         // leaf order is irrelevant (search scans all entries), so just append
         node.insert(node.count, context.box, context.value);
         _updateIndex(context.key, context.value, node);
-        if (node.parent != null) {
-          node.parent._updateUpward();
-        }
         return null;
       } else {
         // split and insert
@@ -275,19 +272,14 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       var newNode = _insert(node.getChild(ix), level - 1, context);
 
       if (newNode == null) {
+        context.box.union((RBox) node.boxes[ix]);
         return null;
       } else {
+        // split
         Node<VALUE> result = null;
-        // The child we descended into grew and split, so its stored box is stale.
-        // Refresh it before it is read below; otherwise the split path (which does
-        // not call _updateUpward) copies the stale box and can leave a parent box
-        // that under-covers the child, causing search to prune away real matches.
         node.boxes[ix] = node.getChild(ix).getBox();
-        // insert returned node as value in the current one
         if (node.count < ORDER) {
-          // insert into the current node
           node.insert(ix + 1, newNode.getBox(), newNode);
-          node._updateUpward();
         } else {
           // split and insert
           result = _splitAndAdd(node, context, newNode);
@@ -670,13 +662,6 @@ public class RTree<KEY extends Comparable<KEY>, VALUE extends Comparable> {
       for (int i = 0; i < count; i++) {
         var b = getChild(i).getBox();
         boxes[i] = b;
-      }
-    }
-
-    void _updateUpward() {
-      _updateBoxes();
-      if (parent != null) {
-        parent._updateUpward();
       }
     }
 
